@@ -2,42 +2,35 @@ pipeline {
     agent any
 
     environment {
-        ACR_NAME = 'krupaacr'               // your Azure Container Registry name
-        RESOURCE_GROUP = 'krupa-rg'         // your Azure Resource Group name
-        APP_NAME = 'krupa-webapp'           // your Azure Web App name
+        ACR_LOGIN_SERVER = 'mycontainerregistrykrupa.azurecr.io'
     }
 
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'main', url: 'https://github.com/krupa-43/azure-cicd-webapp.git'
+                git branch: 'main', url: 'https://github.com/yourusername/your-repo.git'
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t azure-cicd-app .'
+                script {
+                    dockerImage = docker.build("${ACR_LOGIN_SERVER}/myapp:${BUILD_NUMBER}")
+                }
             }
         }
 
-        stage('Login to Azure & Push Image') {
+        stage('Push to Azure Container Registry') {
             steps {
-                sh '''
-                az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET --tenant $AZURE_TENANT_ID
-                az acr login --name $ACR_NAME
-                docker tag azure-cicd-app $ACR_NAME.azurecr.io/azure-cicd-app:latest
-                docker push $ACR_NAME.azurecr.io/azure-cicd-app:latest
-                '''
-            }
-        }
-
-        stage('Deploy to Azure Web App') {
-            steps {
-                sh '''
-                az webapp config container set --name $APP_NAME --resource-group $RESOURCE_GROUP \
-                    --docker-custom-image-name $ACR_NAME.azurecr.io/azure-cicd-app:latest \
-                    --docker-registry-server-url https://$ACR_NAME.azurecr.io
-                '''
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'acr-credentials', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                        sh """
+                        echo $PASSWORD | docker login $ACR_LOGIN_SERVER -u $USERNAME --password-stdin
+                        docker push ${ACR_LOGIN_SERVER}/myapp:${BUILD_NUMBER}
+                        docker logout $ACR_LOGIN_SERVER
+                        """
+                    }
+                }
             }
         }
     }
