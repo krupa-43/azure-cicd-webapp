@@ -2,47 +2,53 @@ pipeline {
     agent any
 
     environment {
-        ACR_NAME = 'myjenkinsacr1123328952'
-        IMAGE_NAME = 'myapp'
-        ACR_LOGIN_SERVER = "${ACR_NAME}.azurecr.io"
+        ACR_NAME = "myjenkinsacr1123328952"
+        IMAGE_NAME = "myapp"
+        IMAGE_TAG = "latest"
     }
 
     stages {
         stage('Checkout') {
             steps {
-                git credentialsId: 'github-credentials', url: 'https://github.com/krupa-43/azure-cicd-webapp.git', branch: 'main'
+                git branch: 'main', url: 'https://github.com/krupa-43/azure-cicd-webapp.git'
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 script {
-                    docker.build("${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest")
+                    sh 'docker build -t ${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${IMAGE_TAG} .'
                 }
             }
         }
 
         stage('Login to ACR') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'acr-credentials', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
-                    sh "docker login ${ACR_LOGIN_SERVER} -u ${USERNAME} -p ${PASSWORD}"
+                withCredentials([usernamePassword(credentialsId: 'acr-credentials2', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                    sh '''
+                        echo $PASSWORD | docker login ${ACR_NAME}.azurecr.io -u $USERNAME --password-stdin
+                    '''
                 }
             }
         }
 
         stage('Push to ACR') {
             steps {
-                sh "docker push ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest"
+                script {
+                    sh '''
+                        docker push ${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${IMAGE_TAG}
+                    '''
+                }
             }
         }
     }
 
     post {
         success {
-            echo 'Image pushed successfully to ACR!'
+            echo '✅ Docker image pushed to ACR successfully!'
         }
         failure {
-            echo 'Build failed!'
+            echo '❌ Build failed!'
         }
     }
 }
