@@ -2,46 +2,50 @@ pipeline {
     agent any
 
     environment {
+        RESOURCE_GROUP = 'jenkins-rg'
         ACR_LOGIN_SERVER = 'kruparegistry353154903.azurecr.io'
         IMAGE_NAME = 'myapp'
-        RESOURCE_GROUP = 'jenkins-rg'
         LOCATION = 'centralindia'
     }
 
     stages {
-
-        stage('Checkout Code') {
+        stage('Checkout') {
             steps {
                 git branch: 'main',
-                    credentialsId: 'github-krupa',
-                    url: 'https://github.com/krupa-43/azure-cicd-webapp'
+                    url: 'https://github.com/krupa-43/azure-cicd-webapp.git'
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 script {
-                    sh 'docker build -t $ACR_LOGIN_SERVER/$IMAGE_NAME:latest .'
+                    // Use short Git commit hash as image tag
+                    IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    echo "Building Docker image with tag: ${IMAGE_TAG}"
+
+                    sh "docker build -t $ACR_LOGIN_SERVER/$IMAGE_NAME:latest ."
+                    sh "docker tag $ACR_LOGIN_SERVER/$IMAGE_NAME:latest $ACR_LOGIN_SERVER/$IMAGE_NAME:${IMAGE_TAG}"
                 }
             }
         }
 
-        stage('Login to Azure ACR') {
+        stage('Login to ACR') {
             steps {
                 withCredentials([
                     string(credentialsId: 'acr-username', variable: 'ACR_USERNAME'),
                     string(credentialsId: 'acr-password', variable: 'ACR_PASSWORD')
                 ]) {
-                    sh '''
-                        echo $ACR_PASSWORD | docker login $ACR_LOGIN_SERVER -u $ACR_USERNAME --password-stdin
-                    '''
+                    sh "docker login $ACR_LOGIN_SERVER -u $ACR_USERNAME -p $ACR_PASSWORD"
                 }
             }
         }
 
-        stage('Push Docker Image to ACR') {
+        stage('Push Docker Image') {
             steps {
-                sh 'docker push $ACR_LOGIN_SERVER/$IMAGE_NAME:latest'
+                sh '''
+                    docker push $ACR_LOGIN_SERVER/$IMAGE_NAME:latest
+                    docker push $ACR_LOGIN_SERVER/$IMAGE_NAME:${IMAGE_TAG}
+                '''
             }
         }
 
@@ -52,10 +56,14 @@ pipeline {
                     string(credentialsId: 'acr-password', variable: 'ACR_PASSWORD')
                 ]) {
                     sh '''
+                        echo "Deleting old container instance (if any)..."
+                        az container delete --name myappcontainer --resource-group $RESOURCE_GROUP --yes || true
+
+                        echo "Deploying new container with tag: ${IMAGE_TAG}"
                         az container create \
                             --resource-group $RESOURCE_GROUP \
                             --name myappcontainer \
-                            --image $ACR_LOGIN_SERVER/$IMAGE_NAME:latest \
+                            --image $ACR_LOGIN_SERVER/$IMAGE_NAME:${IMAGE_TAG} \
                             --dns-name-label krupaapp$RANDOM \
                             --ports 80 \
                             --os-type Linux \
@@ -65,9 +73,19 @@ pipeline {
                             --location $LOCATION \
                             --registry-login-server $ACR_LOGIN_SERVER \
                             --registry-username "$ACR_USERNAME" \
-                            --registry-password "$ACR_PASSWORD"
+                            --registry-password "$ACR_PASSWORD" \
+                            --image-pull-policy Always
                     '''
                 }
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                sh '''
+                    echo "Checking running container image..."
+                    az container show --name myappcontainer --resource-group $RESOURCE_GROUP --query "containers[].image" -o tsv
+                '''
             }
         }
     }
