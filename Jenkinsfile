@@ -2,40 +2,40 @@ pipeline {
     agent any
 
     environment {
-        // Azure Container Registry details
-        ACR_LOGIN_SERVER = "kruparegistry353154903.azurecr.io"
-        ACR_USERNAME = "kruparegistry353154903"
-        // The ACR_PASSWORD is pulled from Jenkins credentials (securely)
+        ACR_NAME = 'kruparegistry353154903'
+        ACR_LOGIN_SERVER = "${ACR_NAME}.azurecr.io"
+        RESOURCE_GROUP = 'krupa-rg'
+        CONTAINER_NAME = 'myappcontainer'
+        DNS_LABEL = 'krupaapp4023'
+        LOCATION = 'centralindia'
+        IMAGE_NAME = 'myapp'
     }
 
     stages {
+
         stage('Checkout') {
             steps {
-                git branch: 'main',
-                    url: 'https://github.com/krupa-43/azure-cicd-webapp.git'
+                git branch: 'main', url: 'https://github.com/krupa-43/azure-cicd-webapp.git'
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 script {
-                    // Get short commit hash for tagging
-                    COMMIT_HASH = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-                    echo "Building Docker image with tag: ${COMMIT_HASH}"
-
-                    sh """
-                    docker build -t ${ACR_LOGIN_SERVER}/myapp:latest .
-                    docker tag ${ACR_LOGIN_SERVER}/myapp:latest ${ACR_LOGIN_SERVER}/myapp:${COMMIT_HASH}
-                    """
+                    def commitHash = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    echo "Building Docker image with tag: ${commitHash}"
+                    sh "docker build -t ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest ."
+                    sh "docker tag ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${commitHash}"
+                    env.COMMIT_HASH = commitHash
                 }
             }
         }
 
         stage('Login to ACR') {
             steps {
-                withCredentials([string(credentialsId: 'acr-password', variable: 'ACR_PASSWORD')]) {
+                withCredentials([usernamePassword(credentialsId: 'acr-credentials', usernameVariable: 'ACR_USERNAME', passwordVariable: 'ACR_PASSWORD')]) {
                     sh """
-                    echo ${ACR_PASSWORD} | docker login ${ACR_LOGIN_SERVER} -u ${ACR_USERNAME} --password-stdin
+                        echo \$ACR_PASSWORD | docker login ${ACR_LOGIN_SERVER} -u \$ACR_USERNAME --password-stdin
                     """
                 }
             }
@@ -44,37 +44,47 @@ pipeline {
         stage('Push Docker Image') {
             steps {
                 script {
-                    sh """
-                    docker push ${ACR_LOGIN_SERVER}/myapp:latest
-                    docker push ${ACR_LOGIN_SERVER}/myapp:${COMMIT_HASH}
-                    """
+                    sh "docker push ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest"
+                    sh "docker push ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${env.COMMIT_HASH}"
                 }
             }
         }
 
         stage('Deploy to Azure Container Instance') {
             steps {
-                withCredentials([string(credentialsId: 'acr-password', variable: 'ACR_PASSWORD')]) {
+                withCredentials([usernamePassword(credentialsId: 'acr-credentials', usernameVariable: 'ACR_USERNAME', passwordVariable: 'ACR_PASSWORD')]) {
                     script {
-                        // Create a unique DNS name for the deployment
-                        def dnsLabel = "krupaapp${new Random().nextInt(9999)}"
-                        echo "Deploying container with DNS label: ${dnsLabel}"
+                        echo "Deploying container with DNS label: ${DNS_LABEL}"
 
+                        // Ensure resource group exists
                         sh """
-                        az container create \
-                          --resource-group krupa-rg \
-                          --name myappcontainer \
-                          --image ${ACR_LOGIN_SERVER}/myapp:${COMMIT_HASH} \
-                          --dns-name-label ${dnsLabel} \
-                          --ports 80 \
-                          --os-type Linux \
-                          --cpu 1 \
-                          --memory 1.5 \
-                          --restart-policy Always \
-                          --location centralindia \
-                          --registry-login-server ${ACR_LOGIN_SERVER} \
-                          --registry-username ${ACR_USERNAME} \
-                          --registry-password ${ACR_PASSWORD}
+                            az group create --name ${RESOURCE_GROUP} --location ${LOCATION}
+                        """
+
+                        // Delete old container (if it exists)
+                        sh """
+                            if az container show --resource-group ${RESOURCE_GROUP} --name ${CONTAINER_NAME} &>/dev/null; then
+                                echo "Old container found. Deleting..."
+                                az container delete --resource-group ${RESOURCE_GROUP} --name ${CONTAINER_NAME} --yes
+                            fi
+                        """
+
+                        // Deploy new container
+                        sh """
+                            az container create \
+                                --resource-group ${RESOURCE_GROUP} \
+                                --name ${CONTAINER_NAME} \
+                                --image ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${env.COMMIT_HASH} \
+                                --dns-name-label ${DNS_LABEL} \
+                                --ports 80 \
+                                --os-type Linux \
+                                --cpu 1 \
+                                --memory 1.5 \
+                                --restart-policy Always \
+                                --location ${LOCATION} \
+                                --registry-login-server ${ACR_LOGIN_SERVER} \
+                                --registry-username \$ACR_USERNAME \
+                                --registry-password \$ACR_PASSWORD
                         """
                     }
                 }
@@ -84,8 +94,7 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 script {
-                    echo "Verifying Azure Container deployment..."
-                    sh "az container show --resource-group krupa-rg --name myappcontainer --query ipAddress.fqdn -o tsv"
+                    echo "✅ Deployment completed! Access your app at: http://${DNS_LABEL}.${LOCATION}.azurecontainer.io"
                 }
             }
         }
@@ -93,7 +102,7 @@ pipeline {
 
     post {
         success {
-            echo "✅ Deployment successful! 🎉"
+            echo "🎉 Pipeline completed successfully!"
         }
         failure {
             echo "❌ Pipeline failed. Check the logs for details."
