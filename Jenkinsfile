@@ -2,7 +2,6 @@ pipeline {
     agent any
 
     environment {
-        // Change this if your actual resource group name differs
         RESOURCE_GROUP = 'jenkins-rg'
         ACR_NAME = 'kruparegistry353154903'
         IMAGE_NAME = 'myapp'
@@ -32,17 +31,10 @@ pipeline {
 
         stage('Login to ACR') {
             steps {
-                withCredentials([
-                    file(credentialsId: 'acr-username-file', variable: 'ACR_USERNAME_FILE'),
-                    file(credentialsId: 'acr-password-file', variable: 'ACR_PASSWORD_FILE')
-                ]) {
-                    script {
-                        def ACR_USERNAME = readFile(ACR_USERNAME_FILE).trim()
-                        def ACR_PASSWORD = readFile(ACR_PASSWORD_FILE).trim()
-                        sh """
-                            echo ${ACR_PASSWORD} | docker login ${ACR_NAME}.azurecr.io -u ${ACR_USERNAME} --password-stdin
-                        """
-                    }
+                withCredentials([usernamePassword(credentialsId: 'acr-username', usernameVariable: 'ACR_USERNAME', passwordVariable: 'ACR_PASSWORD')]) {
+                    sh """
+                        echo ${ACR_PASSWORD} | docker login ${ACR_NAME}.azurecr.io -u ${ACR_USERNAME} --password-stdin
+                    """
                 }
             }
         }
@@ -61,19 +53,14 @@ pipeline {
 
         stage('Deploy to Azure Container Instance') {
             steps {
-                withCredentials([
-                    file(credentialsId: 'acr-username-file', variable: 'ACR_USERNAME_FILE'),
-                    file(credentialsId: 'acr-password-file', variable: 'ACR_PASSWORD_FILE')
-                ]) {
+                withCredentials([usernamePassword(credentialsId: 'acr-username', usernameVariable: 'ACR_USERNAME', passwordVariable: 'ACR_PASSWORD')]) {
                     script {
-                        def ACR_USERNAME = readFile(ACR_USERNAME_FILE).trim()
-                        def ACR_PASSWORD = readFile(ACR_PASSWORD_FILE).trim()
                         def COMMIT_HASH = sh(returnStdout: true, script: "git rev-parse --short HEAD").trim()
                         def DNS_LABEL = "krupaapp${env.BUILD_NUMBER}"
 
                         echo "Deploying container with DNS label: ${DNS_LABEL}"
 
-                        // Try deployment — if it fails, rollback to previous image
+                        // Try deployment and rollback if needed
                         try {
                             sh """
                                 az container create \
