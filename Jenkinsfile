@@ -19,12 +19,14 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    // Use short Git commit hash as image tag
-                    IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    echo "Building Docker image with tag: ${IMAGE_TAG}"
+                    // ✅ Define IMAGE_TAG as a global environment variable
+                    env.IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    echo "Building Docker image with tag: ${env.IMAGE_TAG}"
 
-                    sh "docker build -t $ACR_LOGIN_SERVER/$IMAGE_NAME:latest ."
-                    sh "docker tag $ACR_LOGIN_SERVER/$IMAGE_NAME:latest $ACR_LOGIN_SERVER/$IMAGE_NAME:${IMAGE_TAG}"
+                    sh """
+                        docker build -t $ACR_LOGIN_SERVER/$IMAGE_NAME:latest .
+                        docker tag $ACR_LOGIN_SERVER/$IMAGE_NAME:latest $ACR_LOGIN_SERVER/$IMAGE_NAME:${IMAGE_TAG}
+                    """
                 }
             }
         }
@@ -35,17 +37,19 @@ pipeline {
                     string(credentialsId: 'acr-username', variable: 'ACR_USERNAME'),
                     string(credentialsId: 'acr-password', variable: 'ACR_PASSWORD')
                 ]) {
-                    sh "docker login $ACR_LOGIN_SERVER -u $ACR_USERNAME -p $ACR_PASSWORD"
+                    sh """
+                        echo $ACR_PASSWORD | docker login $ACR_LOGIN_SERVER -u $ACR_USERNAME --password-stdin
+                    """
                 }
             }
         }
 
         stage('Push Docker Image') {
             steps {
-                sh '''
+                sh """
                     docker push $ACR_LOGIN_SERVER/$IMAGE_NAME:latest
                     docker push $ACR_LOGIN_SERVER/$IMAGE_NAME:${IMAGE_TAG}
-                '''
+                """
             }
         }
 
@@ -55,7 +59,7 @@ pipeline {
                     string(credentialsId: 'acr-username', variable: 'ACR_USERNAME'),
                     string(credentialsId: 'acr-password', variable: 'ACR_PASSWORD')
                 ]) {
-                    sh '''
+                    sh """
                         echo "Deleting old container instance (if any)..."
                         az container delete --name myappcontainer --resource-group $RESOURCE_GROUP --yes || true
 
@@ -75,7 +79,7 @@ pipeline {
                             --registry-username "$ACR_USERNAME" \
                             --registry-password "$ACR_PASSWORD" \
                             --image-pull-policy Always
-                    '''
+                    """
                 }
             }
         }
