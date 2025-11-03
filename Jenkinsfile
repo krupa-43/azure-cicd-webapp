@@ -2,31 +2,28 @@ pipeline {
     agent any
 
     environment {
-        RESOURCE_GROUP = 'jenkins-rg'
-        ACR_LOGIN_SERVER = 'kruparegistry353154903.azurecr.io'
+        ACR_NAME = 'kruparegistry353154903'
+        ACR_LOGIN_SERVER = "${ACR_NAME}.azurecr.io"
         IMAGE_NAME = 'myapp'
+        RESOURCE_GROUP = 'krupa-rg'
         LOCATION = 'centralindia'
     }
 
     stages {
+
         stage('Checkout') {
             steps {
-                git branch: 'main',
-                    url: 'https://github.com/krupa-43/azure-cicd-webapp.git'
+                git branch: 'main', url: 'https://github.com/krupa-43/azure-cicd-webapp.git'
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 script {
-                    // ✅ Define IMAGE_TAG as a global environment variable
-                    env.IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    echo "Building Docker image with tag: ${env.IMAGE_TAG}"
-
-                    sh """
-                        docker build -t $ACR_LOGIN_SERVER/$IMAGE_NAME:latest .
-                        docker tag $ACR_LOGIN_SERVER/$IMAGE_NAME:latest $ACR_LOGIN_SERVER/$IMAGE_NAME:${IMAGE_TAG}
-                    """
+                    COMMIT_HASH = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    echo "Building Docker image with tag: ${COMMIT_HASH}"
+                    sh "docker build -t ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest ."
+                    sh "docker tag ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${COMMIT_HASH}"
                 }
             }
         }
@@ -34,11 +31,10 @@ pipeline {
         stage('Login to ACR') {
             steps {
                 withCredentials([
-                    string(credentialsId: 'acr-username', variable: 'ACR_USERNAME'),
-                    string(credentialsId: 'acr-password', variable: 'ACR_PASSWORD')
+                    usernamePassword(credentialsId: 'acr-credentials', passwordVariable: 'ACR_PASSWORD', usernameVariable: 'ACR_USERNAME')
                 ]) {
                     sh """
-                        echo $ACR_PASSWORD | docker login $ACR_LOGIN_SERVER -u $ACR_USERNAME --password-stdin
+                        echo ${ACR_PASSWORD} | docker login ${ACR_LOGIN_SERVER} -u ${ACR_USERNAME} --password-stdin
                     """
                 }
             }
@@ -46,50 +42,54 @@ pipeline {
 
         stage('Push Docker Image') {
             steps {
-                sh """
-                    docker push $ACR_LOGIN_SERVER/$IMAGE_NAME:latest
-                    docker push $ACR_LOGIN_SERVER/$IMAGE_NAME:${IMAGE_TAG}
-                """
+                script {
+                    sh "docker push ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest"
+                    sh "docker push ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${COMMIT_HASH}"
+                }
             }
         }
 
         stage('Deploy to Azure Container Instance') {
             steps {
                 withCredentials([
-                    string(credentialsId: 'acr-username', variable: 'ACR_USERNAME'),
-                    string(credentialsId: 'acr-password', variable: 'ACR_PASSWORD')
+                    usernamePassword(credentialsId: 'acr-credentials', passwordVariable: 'ACR_PASSWORD', usernameVariable: 'ACR_USERNAME')
                 ]) {
-                    sh """
-                        echo "Deleting old container instance (if any)..."
-                        az container delete --name myappcontainer --resource-group $RESOURCE_GROUP --yes || true
+                    script {
+                        // Generate random label for DNS
+                        def randomLabel = "krupaapp${new Random().nextInt(10000)}"
+                        echo "Deploying container with DNS label: ${randomLabel}"
 
-                        echo "Deploying new container with tag: ${IMAGE_TAG}"
-                        az container create \
-                            --resource-group $RESOURCE_GROUP \
-                            --name myappcontainer \
-                            --image $ACR_LOGIN_SERVER/$IMAGE_NAME:${IMAGE_TAG} \
-                            --dns-name-label krupaapp$RANDOM \
-                            --ports 80 \
-                            --os-type Linux \
-                            --cpu 1 \
-                            --memory 1.5 \
-                            --restart-policy Always \
-                            --location $LOCATION \
-                            --registry-login-server $ACR_LOGIN_SERVER \
-                            --registry-username "$ACR_USERNAME" \
-                            --registry-password "$ACR_PASSWORD" \
-                            --image-pull-policy Always
-                    """
+                        sh """
+                            az container create \
+                                --resource-group ${RESOURCE_GROUP} \
+                                --name myappcontainer \
+                                --image ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${COMMIT_HASH} \
+                                --dns-name-label ${randomLabel} \
+                                --ports 80 \
+                                --os-type Linux \
+                                --cpu 1 \
+                                --memory 1.5 \
+                                --restart-policy Always \
+                                --location ${LOCATION} \
+                                --registry-login-server ${ACR_LOGIN_SERVER} \
+                                --registry-username "${ACR_USERNAME}" \
+                                --registry-password "${ACR_PASSWORD}" \
+                                --image-pull-policy Always
+                        """
+
+                        // Store DNS label for next stage
+                        env.APP_DNS = randomLabel
+                    }
                 }
             }
         }
 
         stage('Verify Deployment') {
             steps {
-                sh '''
-                    echo "Checking running container image..."
-                    az container show --name myappcontainer --resource-group $RESOURCE_GROUP --query "containers[].image" -o tsv
-                '''
+                script {
+                    echo "Deployment completed successfully!"
+                    echo "Your app is available at: http://${APP_DNS}.${LOCATION}.azurecontainer.io"
+                }
             }
         }
     }
